@@ -13,6 +13,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::env;
+use tracing_subscriber::{fmt, Registry, EnvFilter, prelude::*};
 
 #[derive(Deserialize)]
 struct ChatRequest { prompt: String }
@@ -26,6 +27,11 @@ struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    Registry::default()
+        .with(fmt::layer().pretty())
+        .with(EnvFilter::from_default_env())
+        .init();
+
     let maps_api_key = env::var("MAPS_API_KEY")
         .expect("MAPS_API_KEY environment variable must be set");
 
@@ -58,13 +64,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         agent: weather_agent
     });
 
-    // --- PART 2: AXUM ROUTING ---
     let app = Router::new()
         .route("/chat", post(handle_chat))
         .with_state(shared_state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-    println!("API Server running on http://localhost:8080");
+    tracing::info!("API Server running on http://localhost:8080");
     axum::serve(listener, app).await?;
 
     Ok(())
