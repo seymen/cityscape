@@ -13,3 +13,8 @@ reqwest = "0.12"
 http = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+gcloud-sdk = "0.28"
+opentelemetry-gcloud-trace = "0.22" 
+opentelemetry = "0.31"
+tracing-opentelemetry = "0.32"
+tracing-stackdriver = { version = "0.10", features = ["opentelemetry"] }

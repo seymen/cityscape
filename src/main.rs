@@ -14,8 +14,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::env;
 use tracing_subscriber::{fmt, Registry, EnvFilter, prelude::*};
+use opentelemetry_gcloud_trace::GcpCloudTraceExporterBuilder;
+use tracing_stackdriver::CloudTraceConfiguration;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct ChatRequest { prompt: String }
 
 #[derive(Serialize)]
@@ -27,17 +29,28 @@ struct AppState {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let maps_api_key = env::var("MAPS_API_KEY")
+        .expect("MAPS_API_KEY environment variable must be set");
+    let project_id = env::var("PROJECT_ID")
+        .expect("PROJECT_ID environment variable must be set");
+
+    let gcp_trace_exporter = GcpCloudTraceExporterBuilder::for_default_project_id().await?;
+    let tracer_provider = gcp_trace_exporter.create_provider().await?;
+    let tracer = gcp_trace_exporter.install(&tracer_provider).await?;
+
     Registry::default()
         .with(fmt::layer().pretty())
         .with(EnvFilter::from_default_env())
+        .with(tracing_opentelemetry::layer().with_tracer(tracer))
+        .with(tracing_stackdriver::layer()
+            .with_cloud_trace(CloudTraceConfiguration { project_id: project_id }))
         .init();
 
-    let maps_api_key = env::var("MAPS_API_KEY")
-        .expect("MAPS_API_KEY environment variable must be set");
+    let root = tracing::info_span!("root");
+    let _root = root.enter();
 
     let mut headers = HeaderMap::new();
-    let header_value = HeaderValue::from_str(&maps_api_key)
-        .expect("Invalid characters in MAPS_API_KEY");
+    let header_value = HeaderValue::from_str(&maps_api_key).unwrap();
     headers.insert("X-Goog-Api-Key", header_value);
 
     let client = reqwest::Client::builder()
@@ -75,11 +88,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[tracing::instrument(name = "process_api_call", skip(state, payload))]
 async fn handle_chat(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<ChatRequest>,
 ) -> Json<ChatResponse> {
-    // The agent handles the tool-calling logic internally
     let answer = state.agent.prompt(&payload.prompt).await
         .unwrap_or_else(|e| format!("Error: {}", e));
 
