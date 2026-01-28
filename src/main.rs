@@ -34,20 +34,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let project_id = env::var("PROJECT_ID")
         .expect("PROJECT_ID environment variable must be set");
 
+    // initialise the Google Cloud trace exporter
     let gcp_trace_exporter = GcpCloudTraceExporterBuilder::for_default_project_id().await?;
     let tracer_provider = gcp_trace_exporter.create_provider().await?;
+
+    // Create the OpenTelemetry Layer
     let tracer = gcp_trace_exporter.install(&tracer_provider).await?;
+    let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+
+    // 2. Initialize the Stackdriver Logging Layer with Trace Correlation
+    let stackdriver_layer = tracing_stackdriver::layer()
+        .with_cloud_trace(CloudTraceConfiguration {
+            project_id: project_id,
+        });
 
     Registry::default()
         .with(fmt::layer().pretty())
         .with(EnvFilter::from_default_env())
-        .with(tracing_opentelemetry::layer().with_tracer(tracer))
-        .with(tracing_stackdriver::layer()
-            .with_cloud_trace(CloudTraceConfiguration { project_id: project_id }))
+        .with(telemetry_layer)
+        .with(stackdriver_layer)
         .init();
-
-    let root = tracing::info_span!("root");
-    let _root = root.enter();
 
     let mut headers = HeaderMap::new();
     let header_value = HeaderValue::from_str(&maps_api_key).unwrap();
