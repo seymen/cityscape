@@ -13,9 +13,16 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::env;
-use tracing_subscriber::{fmt, Registry, EnvFilter, prelude::*};
+
+use opentelemetry::{global, KeyValue};
+use tracing_subscriber::{
+    fmt,
+    layer::SubscriberExt,
+    util::SubscriberInitExt,
+    EnvFilter
+};
+use opentelemetry_sdk::resource::Resource;
 use opentelemetry_gcloud_trace::GcpCloudTraceExporterBuilder;
-use tracing_stackdriver::CloudTraceConfiguration;
 
 #[derive(Deserialize, Debug)]
 struct ChatRequest { prompt: String }
@@ -31,28 +38,38 @@ struct AppState {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let maps_api_key = env::var("MAPS_API_KEY")
         .expect("MAPS_API_KEY environment variable must be set");
-    let project_id = env::var("PROJECT_ID")
+    let _project_id = env::var("PROJECT_ID")
         .expect("PROJECT_ID environment variable must be set");
 
-    // initialise the Google Cloud trace exporter
-    let gcp_trace_exporter = GcpCloudTraceExporterBuilder::for_default_project_id().await?;
-    let tracer_provider = gcp_trace_exporter.create_provider().await?;
+    // 1. Configure the Google Cloud Trace exporter
+    let resource = Resource::builder()
+        .with_attributes(vec![
+            KeyValue::new("service.name", "cityscape")
+        ])
+        .build();
+    let exporter = GcpCloudTraceExporterBuilder::for_default_project_id()
+        .await?
+        .with_resource(resource);
+    // 2. Create a TracerProvider with the GCP exporter
+    let tracer_provider = exporter.create_provider().await?;
+    // 3. Set the global tracer provider for the opentelemetry crate
+    // this ensures any part of the application, including 3P libs
+    // can get a tracer instance and create spans without explicitly passing
+    // the tracer_provider everywhere.
+    global::set_tracer_provider(tracer_provider.clone());
 
-    // Create the OpenTelemetry Layer
-    let tracer = gcp_trace_exporter.install(&tracer_provider).await?;
-    let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
-
-    // 2. Initialize the Stackdriver Logging Layer with Trace Correlation
-    let stackdriver_layer = tracing_stackdriver::layer()
-        .with_cloud_trace(CloudTraceConfiguration {
-            project_id: project_id,
-        });
-
-    Registry::default()
-        .with(fmt::layer().pretty())
+    // 4. Obtain a tracer instance from the global TracerProvider
+    // the string passed here is referred to as the instrumentation scope name
+    // which helps identify the source of the telemetry data.
+    let tracer = global::tracer("weather-agent");
+    // Each layer will get the same tracing information and act on it
+    // EnvFilter is the main filter for the entire pipeline
+    tracing_subscriber::registry()
+        // RUST_LOG env variable with value like "info,rig=trace,rmcp=debug"
+        // Alternatively, use EnvFilter::new("info,rig=trace,rmcp=debug")
         .with(EnvFilter::from_default_env())
-        .with(telemetry_layer)
-        .with(stackdriver_layer)
+        .with(fmt::layer().compact()) //printing to console
+        .with(tracing_opentelemetry::layer().with_tracer(tracer)) //off to GCP
         .init();
 
     let mut headers = HeaderMap::new();
@@ -73,8 +90,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mcp_client = ().serve(transport).await?; 
     let tools = mcp_client.list_tools(Default::default()).await?.tools;
 
-    let gemini_client = gemini::Client::from_env();
-    let weather_agent = gemini_client.agent("gemini-2.5-flash")
+    let client = gemini::Client::from_env();
+    let weather_agent = client.agent("gemini-2.5-flash")
         .preamble("Use the weather tool to get a summary of current weather conditions in a city to provide the image with up to date information.")
         .rmcp_tools(tools, mcp_client.peer().to_owned())
         .build();

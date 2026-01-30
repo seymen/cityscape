@@ -227,6 +227,7 @@ dependencies = [
  "http",
  "opentelemetry 0.31.0",
  "opentelemetry-gcloud-trace",
+ "opentelemetry_sdk 0.31.0",
  "reqwest",
  "rig-core",
  "rmcp",

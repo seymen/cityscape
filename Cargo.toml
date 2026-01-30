@@ -18,3 +18,4 @@ opentelemetry-gcloud-trace = "0.22"
 opentelemetry = "0.31"
 tracing-opentelemetry = "0.32"
 tracing-stackdriver = { version = "0.10", features = ["opentelemetry"] }
+opentelemetry_sdk = "0.31.0"
